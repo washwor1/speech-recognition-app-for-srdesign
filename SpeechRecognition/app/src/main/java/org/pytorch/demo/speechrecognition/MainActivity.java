@@ -2,10 +2,13 @@ package org.pytorch.demo.speechrecognition;
 
 import android.content.Context;
 import android.media.AudioFormat;
+import android.media.AudioManager;
 import android.media.AudioRecord;
+import android.media.AudioTrack;
 import android.media.MediaRecorder;
 import android.os.Build;
 import android.os.Bundle;
+import android.os.Environment;
 import android.os.Handler;
 import android.os.HandlerThread;
 import android.util.Log;
@@ -24,7 +27,10 @@ import java.io.FileOutputStream;
 import java.io.IOException;
 import java.io.InputStream;
 import java.io.OutputStream;
+import java.nio.ByteBuffer;
+import java.nio.ByteOrder;
 import java.nio.FloatBuffer;
+import java.util.Arrays;
 
 import org.pytorch.LiteModuleLoader;
 
@@ -37,8 +43,8 @@ public class MainActivity extends AppCompatActivity implements Runnable {
     private Button mButton;
 
     private final static int REQUEST_RECORD_AUDIO = 13;
-    private final static int AUDIO_LEN_IN_SECOND = 6;
-    private final static int SAMPLE_RATE = 16000;
+    private final static int AUDIO_LEN_IN_SECOND = 1;
+    private final static int SAMPLE_RATE = 8000;
     private final static int RECORDING_LENGTH = SAMPLE_RATE * AUDIO_LEN_IN_SECOND;
 
     private final static String LOG_TAG = MainActivity.class.getSimpleName();
@@ -192,11 +198,29 @@ public class MainActivity extends AppCompatActivity implements Runnable {
         });
     }
 
+
+
+
+
     private String recognize(float[] floatInputBuffer) {
         if (module == null) {
-            module = LiteModuleLoader.load(assetFilePath(getApplicationContext(), "wav2vec2.ptl"));
+            module = LiteModuleLoader.load(assetFilePath(getApplicationContext(), "ts_model2.ptl"));
         }
 
+        // Play the audio data from buffer
+        int sampleRate = 8000;
+        int bufferSize = AudioTrack.getMinBufferSize(sampleRate, AudioFormat.CHANNEL_OUT_MONO, AudioFormat.ENCODING_PCM_16BIT);
+        AudioTrack audioTrack = new AudioTrack(AudioManager.STREAM_MUSIC, sampleRate, AudioFormat.CHANNEL_OUT_MONO, AudioFormat.ENCODING_PCM_16BIT, bufferSize, AudioTrack.MODE_STREAM);
+        audioTrack.play();
+        short[] shortInputBuffer = new short[floatInputBuffer.length];
+        for (int i = 0; i < floatInputBuffer.length; i++) {
+            shortInputBuffer[i] = (short) (floatInputBuffer[i] * Short.MAX_VALUE);
+        }
+        audioTrack.write(shortInputBuffer, 0, shortInputBuffer.length);
+        audioTrack.stop();
+        audioTrack.release();
+
+        // Pass the audio data to the model for prediction
         double wav2vecinput[] = new double[RECORDING_LENGTH];
         for (int n = 0; n < RECORDING_LENGTH; n++)
             wav2vecinput[n] = floatInputBuffer[n];
@@ -205,9 +229,144 @@ public class MainActivity extends AppCompatActivity implements Runnable {
         for (double val : wav2vecinput)
             inTensorBuffer.put((float)val);
 
-        Tensor inTensor = Tensor.fromBlob(inTensorBuffer, new long[]{1, RECORDING_LENGTH});
-        final String result = module.forward(IValue.from(inTensor)).toStr();
+        Tensor inTensor = Tensor.fromBlob(inTensorBuffer, new long[]{1, 1, RECORDING_LENGTH});
+        Tensor outTensor = module.forward(IValue.from(inTensor)).toTensor();
+        float[] outArray = outTensor.getDataAsFloatArray();
+
+        // Define the list of labels
+        String[] labels = {"yes", "no", "up", "down", "left", "right", "on", "off", "stop", "go"};
+
+        // Get the index of the maximum value in the output array
+        int maxIndex = 0;
+        for (int i = 1; i < outArray.length; i++) {
+            if (outArray[i] > outArray[maxIndex]) {
+                maxIndex = i;
+            }
+        }
+
+        // Look up the corresponding label from the list
+        String result = labels[maxIndex];
 
         return result;
     }
+
 }
+
+
+//
+//
+//
+//    private String recognize(float[] floatInputBuffer) {
+//        if (module == null) {
+//            module = LiteModuleLoader.load(assetFilePath(getApplicationContext(), "ts_model2.ptl"));
+//        }
+//
+//        // Save the audio data to a file
+//        String fileName = "recording.wav";
+//        File outputFile = new File(Environment.getExternalStoragePublicDirectory(Environment.DIRECTORY_DOWNLOADS), fileName);
+//        try {
+//            FileOutputStream fos = new FileOutputStream(outputFile);
+//            byte[] buffer = new byte[floatInputBuffer.length * 2];
+//            for (int i = 0; i < floatInputBuffer.length; i++) {
+//                short val = (short) (floatInputBuffer[i] * Short.MAX_VALUE);
+//                buffer[i * 2] = (byte) (val & 0xff);
+//                buffer[i * 2 + 1] = (byte) ((val >> 8) & 0xff);
+//            }
+//            fos.write(new byte[]{'R', 'I', 'F', 'F'});
+//            fos.write(ByteBuffer.allocate(4).order(ByteOrder.LITTLE_ENDIAN).putInt(36 + buffer.length).array());
+//            fos.write(new byte[]{'W', 'A', 'V', 'E', 'f', 'm', 't', ' '});
+//            fos.write(ByteBuffer.allocate(4).order(ByteOrder.LITTLE_ENDIAN).putInt(16).array());
+//            fos.write(ByteBuffer.allocate(2).order(ByteOrder.LITTLE_ENDIAN).putShort((short) 1).array());
+//            fos.write(ByteBuffer.allocate(2).order(ByteOrder.LITTLE_ENDIAN).putShort((short) 1).array());
+//            fos.write(ByteBuffer.allocate(4).order(ByteOrder.LITTLE_ENDIAN).putInt(16000).array());
+//            fos.write(ByteBuffer.allocate(4).order(ByteOrder.LITTLE_ENDIAN).putInt(32000).array());
+//            fos.write(ByteBuffer.allocate(2).order(ByteOrder.LITTLE_ENDIAN).putShort((short) 2).array());
+//            fos.write(ByteBuffer.allocate(2).order(ByteOrder.LITTLE_ENDIAN).putShort((short) 16).array());
+//            fos.write(new byte[]{'d', 'a', 't', 'a'});
+//            fos.write(ByteBuffer.allocate(4).order(ByteOrder.LITTLE_ENDIAN).putInt(buffer.length).array());
+//            fos.write(buffer);
+//            fos.close();
+//        } catch (IOException e) {
+//            e.printStackTrace();
+//        }
+//
+//        // Pass the audio data to the model for prediction
+//        double wav2vecinput[] = new double[RECORDING_LENGTH];
+//        for (int n = 0; n < RECORDING_LENGTH; n++)
+//            wav2vecinput[n] = floatInputBuffer[n];
+//
+//        FloatBuffer inTensorBuffer = Tensor.allocateFloatBuffer(RECORDING_LENGTH);
+//        for (double val : wav2vecinput)
+//            inTensorBuffer.put((float) val);
+//
+//        Tensor inTensor = Tensor.fromBlob(inTensorBuffer, new long[]{1, 1, RECORDING_LENGTH});
+//        Tensor outTensor = module.forward(IValue.from(inTensor)).toTensor();
+//        float[] outArray = outTensor.getDataAsFloatArray();
+//
+//        // Define the list of labels
+//        String[] labels = {"yes", "no", "up", "down", "left", "right", "on", "off", "stop", "go"};
+//
+//        // Get the index of the maximum value in the output array
+//        int maxIndex = 0;
+//        for (int i = 1; i < outArray.length; i++) {
+//            if (outArray[i] > outArray[maxIndex]) {
+//                maxIndex = i;
+//            }
+//        }
+//
+//        // Look up the corresponding label from the list
+//        String result = labels[maxIndex];
+//
+//        return result;
+//    }
+
+
+
+//
+//    private String recognize(float[] floatInputBuffer) {
+//        if (module == null) {
+//            module = LiteModuleLoader.load(assetFilePath(getApplicationContext(), "ts_model2.ptl"));
+//        }
+//
+//        // Play the audio data from buffer
+//        int sampleRate = 16000;
+//        int bufferSize = AudioTrack.getMinBufferSize(sampleRate, AudioFormat.CHANNEL_OUT_MONO, AudioFormat.ENCODING_PCM_16BIT);
+//        AudioTrack audioTrack = new AudioTrack(AudioManager.STREAM_MUSIC, sampleRate, AudioFormat.CHANNEL_OUT_MONO, AudioFormat.ENCODING_PCM_16BIT, bufferSize, AudioTrack.MODE_STREAM);
+//        audioTrack.play();
+//        short[] shortInputBuffer = new short[floatInputBuffer.length];
+//        for (int i = 0; i < floatInputBuffer.length; i++) {
+//            shortInputBuffer[i] = (short) (floatInputBuffer[i] * Short.MAX_VALUE);
+//        }
+//        audioTrack.write(shortInputBuffer, 0, shortInputBuffer.length);
+//        audioTrack.stop();
+//        audioTrack.release();
+//
+//        // Pass the audio data to the model for prediction
+//        double wav2vecinput[] = new double[RECORDING_LENGTH];
+//        for (int n = 0; n < RECORDING_LENGTH; n++)
+//            wav2vecinput[n] = floatInputBuffer[n];
+//
+//        FloatBuffer inTensorBuffer = Tensor.allocateFloatBuffer(RECORDING_LENGTH);
+//        for (double val : wav2vecinput)
+//            inTensorBuffer.put((float)val);
+//
+//        Tensor inTensor = Tensor.fromBlob(inTensorBuffer, new long[]{1, 1, RECORDING_LENGTH});
+//        Tensor outTensor = module.forward(IValue.from(inTensor)).toTensor();
+//        float[] outArray = outTensor.getDataAsFloatArray();
+//
+//        // Define the list of labels
+//        String[] labels = {"yes", "no", "up", "down", "left", "right", "on", "off", "stop", "go"};
+//
+//        // Get the index of the maximum value in the output array
+//        int maxIndex = 0;
+//        for (int i = 1; i < outArray.length; i++) {
+//            if (outArray[i] > outArray[maxIndex]) {
+//                maxIndex = i;
+//            }
+//        }
+//
+//        // Look up the corresponding label from the list
+//        String result = labels[maxIndex];
+//
+//        return result;
+//    }
